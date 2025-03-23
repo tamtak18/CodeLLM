@@ -98,3 +98,156 @@ User user = userRepository.findByUsername("admin");
 3. LLM（ollama/LM Studio）との連携設計
 
 それに応じて具体的なコードや構成図をご提供できます．
+
+はい，その「**ユーザーが何もしなくてもコードに反応して自動的に関連資料が右側に“わらわら”表示されるモード**」は，非常に魅力的で，**ユーザー体験（UX）を大きく向上**させます．実装も十分に可能です．以下にその実現方法を解説いたします．
+
+---
+
+# 💡 Eclipseで自動ドキュメント連携モードを実現する方法
+
+---
+
+## ✅ ゴール
+
+- 開発者が Eclipse 上でコードを「普通に書いているだけ」で，
+- 特定のテーブル名，メソッド名，クラス名などが書かれた瞬間に，
+- 背後でキーワードを自動検出して，
+- 右側の「関連資料ビュー」に社内ドキュメントが“わらわら”と表示される
+
+---
+
+## 🏗 実現方法の概要
+
+```plaintext
+[Javaコードの編集を監視]
+     ↓
+[一定間隔で変化を検知]
+     ↓
+[ASTまたは正規表現で識別子（テーブル名やメソッド名）抽出]
+     ↓
+[既存のPython検索APIへクエリ送信]
+     ↓
+[関連資料を右ペインに表示（自動更新）]
+```
+
+---
+
+## 第1章：編集イベントを検出する（Java）
+
+### 方法A：`IDocumentListener`（最も簡単）
+
+```java
+IDocument document = editor.getDocumentProvider().getDocument(editor.getEditorInput());
+document.addDocumentListener(new IDocumentListener() {
+    @Override
+    public void documentChanged(DocumentEvent event) {
+        String newText = event.getDocument().get();
+        // ここでキーワード抽出・検索を呼び出す
+    }
+    @Override
+    public void documentAboutToBeChanged(DocumentEvent event) {}
+});
+```
+
+- `documentChanged` の中で，全文または一部だけを分析すればOKです
+
+---
+
+## 第2章：キーワード抽出ロジック
+
+### 方法A：正規表現（軽量）
+
+```java
+Pattern pattern = Pattern.compile("\\b(get\\w+|tbl_\\w+)\\b");  // メソッド名やテーブル名候補
+Matcher matcher = pattern.matcher(currentText);
+
+Set<String> keywords = new HashSet<>();
+while (matcher.find()) {
+    keywords.add(matcher.group());
+}
+```
+
+- 過去に送信したキーワードと比較し，**新しく出てきた語句のみ**を検索対象にするのがポイント
+
+---
+
+## 第3章：Python API との自動連携
+
+### 🔁 前回と同じ FastAPI サーバに POST
+
+```java
+for (String keyword : newKeywords) {
+    String json = "{\"query\": \"" + keyword + "\"}";
+    HttpRequest request = HttpRequest.newBuilder()
+        .uri(URI.create("http://localhost:8000/search"))
+        .header("Content-Type", "application/json")
+        .POST(HttpRequest.BodyPublishers.ofString(json))
+        .build();
+
+    HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+    updateRightPane(response.body());  // 表示ビューに反映
+}
+```
+
+---
+
+## 第4章：右側ビューの動的更新
+
+- `ViewPart` のインスタンスを保持しておけば，`updateText()` を呼び出すことで随時更新可能
+
+```java
+public void updateRightPane(String contentJson) {
+    Display.getDefault().asyncExec(() -> {
+        RelatedDocView view = (RelatedDocView) PlatformUI.getWorkbench()
+            .getActiveWorkbenchWindow().getActivePage()
+            .findView("com.example.relatedDocView");
+
+        if (view != null) {
+            view.updateText(parseJsonToReadableText(contentJson));
+        }
+    });
+}
+```
+
+---
+
+## 第5章：ユーザー体験の演出アイデア
+
+| アイデア | 説明 |
+|----------|------|
+| 🪄 フェードイン | 新しい資料が表示されたときにふわっと出る |
+| 🏷 タグ付き表示 | 「DB設計」「API仕様」などカテゴリで色分け |
+| 📌 ピン留め機能 | 検索結果を固定して残せるボタン付き |
+
+---
+
+## 第6章：過剰検索を防ぐ工夫
+
+- ⚠️ 文字を1文字打つごとにAPI呼ぶと重くなりますので，
+- 以下のいずれかの戦略で軽量化可能：
+
+| 方法 | 内容 |
+|------|------|
+| デバウンス | 編集後500ms以上変化がなければ検索開始 |
+| キーワードキャッシュ | 同じ語は1回しか検索しない |
+| AST解析 | メソッド/変数が追加されたときだけ検索する
+
+---
+
+## ✅ まとめ
+
+- Eclipseでは「ユーザー操作なし」でコード中の語句を検出することが可能
+- `IDocumentListener`を使えば容易にリアルタイム反応型のPluginが作れる
+- ローカルのFastAPI（Faiss検索）とつなげば，社内文書を即表示できる
+- 表示UIの工夫で“わらわら出てくる”楽しいUXも演出可能
+
+---
+
+ご希望があれば，この自動モードに特化した以下の支援も可能です：
+
+1. ⚙️ Javaでのリアルタイム検索連携Pluginの雛形
+2. 🔍 ASTベースで型やテーブル名だけを検出するロジック
+3. 🎨 UI演出（表示の重複防止・アニメーション演出）
+4. 📁 Eclipseプロジェクトとして一式セットアップ済みZip
+
+必要に応じて，どこからスタートされるかお知らせください．そこから段階的にご一緒します！
